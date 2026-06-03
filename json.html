@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Enterprise PDF Purchase Order Extractor</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<style>
+
+body{
+    font-family:Arial;
+    background:#111;
+    color:white;
+    padding:20px;
+}
+
+h1{
+    margin-bottom:20px;
+}
+
+input, button{
+    padding:10px 15px;
+    margin:5px;
+    cursor:pointer;
+}
+
+textarea{
+    width:100%;
+    height:700px;
+    background:#1e1e1e;
+    color:#00ff99;
+    border:1px solid #444;
+    padding:15px;
+    font-family:Consolas;
+    font-size:13px;
+}
+
+</style>
+</head>
+<body>
+
+<h1>Enterprise PDF Purchase Order Extractor</h1>
+
+<input type="file" id="pdfFile" accept=".pdf">
+
+<button onclick="downloadJSON()">
+Download JSON
+</button>
+
+<textarea id="output"></textarea>
+
+<script>
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+let finalJSON = [];
+
+document.getElementById('pdfFile')
+.addEventListener('change', async function(e){
+
+    const file = e.target.files[0];
+
+    if(!file) return;
+
+    const arrayBuffer = await file.arrayBuffer();
+
+    const pdf = await pdfjsLib.getDocument({
+        data: arrayBuffer
+    }).promise;
+
+    let purchaseOrders = {};
+
+    let currentPO = "";
+
+    //========================================
+    // PROCESS ALL PAGES
+    //========================================
+
+    for(let pageNum = 1; pageNum <= pdf.numPages; pageNum++){
+
+        const page = await pdf.getPage(pageNum);
+
+        const textContent = await page.getTextContent();
+
+        let rawItems = [];
+
+        //====================================
+        // RAW ITEMS
+        //====================================
+
+        textContent.items.forEach(item=>{
+
+            let txt = item.str
+                .replace(/\s+/g," ")
+                .trim();
+
+            if(txt !== ""){
+
+                rawItems.push({
+
+                    text: txt,
+
+                    x: Number(item.transform[4].toFixed(2)),
+
+                    y: Number(item.transform[5].toFixed(2)),
+
+                    height: Number(item.height.toFixed(2))
+
+                });
+
+            }
+
+        });
+
+        //====================================
+        // FULL PAGE TEXT
+        //====================================
+
+        let pageText = rawItems
+            .map(x=>x.text)
+            .join(" ");
+
+        //====================================
+        // FIND PURCHASE ORDER NUMBER
+        //====================================
+
+        let poMatch =
+            pageText.match(/\b\d{10}\b/);
+
+        if(poMatch){
+
+            currentPO = poMatch[0];
+
+            if(!purchaseOrders[currentPO]){
+
+                purchaseOrders[currentPO] = {
+
+                    PurchaseOrderNumber: currentPO,
+
+                    Phone: "",
+
+                    Email: "",
+
+                    DeliveryAddress: [],
+
+                    Items: []
+
+                };
+
+            }
+
+        }
+
+        //====================================
+        // GROUP ROWS BY Y
+        //====================================
+
+        let rows = {};
+
+        rawItems.forEach(item=>{
+
+            const y = Math.round(item.y);
+
+            if(!rows[y]){
+                rows[y] = [];
+            }
+
+            rows[y].push(item);
+
+        });
+
+        // SORT LEFT → RIGHT
+
+        Object.keys(rows).forEach(y=>{
+
+            rows[y].sort((a,b)=> a.x - b.x);
+
+        });
+
+        //====================================
+        // SORT Y TOP → BOTTOM
+        //====================================
+
+        let sortedY =
+            Object.keys(rows)
+                .map(Number)
+                .sort((a,b)=> b - a);
+
+        //====================================
+        // DELIVERY ADDRESS EXTRACTION
+        //====================================
+
+        let addressLines = [];
+
+        let insideAddress = false;
+
+        sortedY.forEach(y=>{
+
+            let row = rows[y];
+
+            let rowText = row
+                .map(x=>x.text)
+                .join(" ")
+                .replace(/\s+/g," ")
+                .trim();
+
+            // START ADDRESS
+
+            if(
+                rowText.includes("Supplier Delivery Address")
+            ){
+                insideAddress = true;
+                return;
+            }
+
+            // STOP ADDRESS
+
+            if(
+                insideAddress &&
+                (
+                    rowText.includes("Supplier Code") ||
+                    rowText.includes("Line Description")
+                )
+            ){
+                insideAddress = false;
+            }
+
+            // COLLECT ADDRESS
+
+            if(insideAddress){
+
+                if(rowText !== ""){
+
+                    addressLines.push({
+
+                        text: rowText,
+
+                        fontHeight: row[0].height || 0
+
+                    });
+
+                }
+
+                // EMAIL
+
+                let emailMatch =
+                    rowText.match(
+                        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+                    );
+
+                if(emailMatch){
+
+                    purchaseOrders[currentPO]
+                        .Email =
+                            emailMatch[0];
+
+                }
+
+                // PHONE
+
+                let phoneMatch =
+                    rowText.match(/\b\d{10,}\b/);
+
+                if(phoneMatch){
+
+                    purchaseOrders[currentPO]
+                        .Phone =
+                            phoneMatch[0];
+
+                }
+
+            }
+
+        });
+
+        //====================================
+        // CLEAN ADDRESS LINES
+        //====================================
+
+        addressLines = addressLines
+
+            .map(x=>({
+
+                text:
+                    x.text
+					.replace(/^LAITHWAITES WINES\s+/,"")
+                        .replace(/\b(\w+)\s+\1\b/g, "$1")
+                        .replace(/\s+/g," ")
+                        .trim(),
+
+                fontHeight: x.fontHeight
+
+            }))
+
+            .filter(x=>
+
+                x.text !== "" &&
+
+                // REMOVE SUPPLIER ADDRESS
+
+                
+                !x.text.includes("New Aquitaine House") &&
+                !x.text.includes("Exeter Way") &&
+                !x.text.includes("Theale") &&
+                !x.text.includes("Berkshire") &&
+                !x.text.includes("RG7 4PL") &&
+
+                // REMOVE EXTRA
+
+                !x.text.includes("Supplier") &&
+                !x.text.includes("TerryberryReward") &&
+                !x.text.includes("Line Description") &&
+                !x.text.includes("Quantity") &&
+                !x.text.includes("Unit Price") &&
+                !x.text.includes("Net") &&
+                !x.text.includes("Contact Tel") &&
+                !x.text.includes("Email:")
+
+            );
+
+        // REMOVE DUPLICATES
+
+        let seen = new Set();
+
+        addressLines = addressLines.filter(x=>{
+
+            if(seen.has(x.text)){
+                return false;
+            }
+
+            seen.add(x.text);
+
+            return true;
+
+        });
+
+        //====================================
+        // FIND CUSTOMER NAME
+        //====================================
+
+        let customerName = "";
+
+        let sortedByFont =
+            [...addressLines]
+                .sort((a,b)=>
+
+                    b.fontHeight - a.fontHeight
+
+                );
+
+        for(let line of sortedByFont){
+
+            let txt = line.text.trim();
+
+            if(
+
+                /^[A-Z][a-z]+\s[A-Z][a-z]+/.test(txt) &&
+
+                !/\d/.test(txt) &&
+
+                !txt.includes("Great Britain") &&
+
+                !txt.includes("Lincolnshire") &&
+
+                !txt.includes("CLEETHORPES")
+
+            ){
+
+                customerName = txt;
+
+                break;
+
+            }
+
+        }
+
+        //====================================
+        // MOVE NAME TO TOP OF ADDRESS
+        //====================================
+
+        if(customerName){
+
+            addressLines =
+                addressLines.filter(x=>
+
+                    x.text !== customerName
+
+                );
+
+            addressLines.unshift({
+
+                text: customerName,
+
+                fontHeight: 999
+
+            });
+
+        }
+
+        //====================================
+        // REMOVE PHONE FROM ADDRESS
+        //====================================
+
+        addressLines = addressLines.filter(x=>
+
+            !/^\d{10,}$/.test(x.text)
+
+        );
+
+        //====================================
+        // SAVE FINAL ADDRESS
+        //====================================
+
+        purchaseOrders[currentPO]
+            .DeliveryAddress =
+                addressLines.map(x=>x.text);
+
+        //====================================
+        // PROCESS ROWS
+        //====================================
+
+        sortedY.forEach(y=>{
+
+            let row = rows[y];
+
+            let fullRow = row
+                .map(x=>x.text)
+                .join(" ")
+				
+                .replace(/\s+/g," ")
+				
+                .trim();
+				
+                
+
+
+
+            //================================
+            // SKIP JUNK
+            //================================
+
+            if(
+                fullRow.includes("TOTAL") ||
+                fullRow.includes("VAT") ||
+                fullRow.includes("@") ||
+                fullRow.includes("Delivery by") ||
+                fullRow.includes("Purchase Order") ||
+                fullRow.includes("Supplier Code") ||
+                fullRow.includes("Description") ||
+                fullRow.includes("Quantity") ||
+                fullRow.includes("Unit Price") ||
+                fullRow.includes("Net") ||
+                fullRow.includes("CHARGES") ||
+                fullRow.includes("404") ||
+                fullRow.includes("##")
+            ){
+                return;
+            }
+
+            //================================
+            // LAST ITEM
+            //================================
+
+            let lastItem =
+                purchaseOrders[currentPO]
+                    .Items[
+                        purchaseOrders[currentPO]
+                            .Items.length - 1
+                    ];
+
+            //================================
+            // MULTI-LINE DESCRIPTION
+            //================================
+
+            if(
+
+                !fullRow.match(/^\d+\s+[A-Z]\d{5}/) &&
+
+                lastItem &&
+
+                fullRow.length > 0 &&
+
+                !fullRow.includes("£")
+
+            ){
+
+                lastItem.Description +=
+                    " " + fullRow.trim();
+
+                return;
+
+            }
+
+            //================================
+            // VALID ITEM ROW
+            //================================
+
+            if(
+                fullRow.match(/^\d+\s+[A-Z]\d{5}/)
+            ){
+
+                // LINE
+
+                let lineMatch =
+                    fullRow.match(/^(\d+)/);
+
+                let line =
+                    lineMatch ? lineMatch[1] : "";
+
+                // SUPPLIER CODE
+
+                let supplierMatch =
+                    fullRow.match(/\b([A-Z]\d{5})\b/);
+
+                let supplierCode =
+                    supplierMatch ? supplierMatch[1] : "";
+
+                // REWARD CODE
+
+                let rewardMatch =
+                    fullRow.match(/\b(DIR\d+)\b/);
+
+                let rewardCode =
+                    rewardMatch ? rewardMatch[1] : "";
+
+                // QUANTITY + PRICES
+
+                let endMatch =
+                    fullRow.match(
+                        /(\d+)\s+£([\d\.]+)\s+£([\d\.]+)$/
+                    );
+
+                let quantity = "";
+                let unitPrice = "";
+                let net = "";
+
+                if(endMatch){
+
+                    quantity = endMatch[1];
+
+                    unitPrice = endMatch[2];
+
+                    net = endMatch[3];
+
+                }
+
+                // DESCRIPTION
+
+                let description = fullRow;
+
+                description =
+                    description.replace(
+                        /^\d+\s+[A-Z]\d{5}\s+DIR\d+\s*/,
+                        ""
+                    );
+
+                description =
+                    description.replace(
+                        /\s+\d+\s+£[\d\.]+\s+£[\d\.]+$/,
+                        ""
+                    );
+
+                description =
+                    description
+                        .replace(/\s+/g," ")
+                        .trim();
+
+                // PUSH ITEM
+
+                purchaseOrders[currentPO]
+                    .Items.push({
+
+                        "Line": line,
+
+                        "SupplierCode": supplierCode,
+
+                        "TerryberryRewardCode": rewardCode,
+
+                        "Description": description,
+
+                        "Quantity": quantity,
+
+                        "UnitPrice": unitPrice,
+
+                        "Net": net
+
+                    });
+
+            }
+
+        });
+
+    }
+
+    //========================================
+    // FINAL JSON
+    //========================================
+
+    finalJSON =
+        Object.values(purchaseOrders);
+
+    document.getElementById("output")
+        .value =
+        JSON.stringify(finalJSON, null, 4);
+
+});
+
+//========================================
+// DOWNLOAD JSON
+//========================================
+
+function downloadJSON(){
+
+    if(finalJSON.length === 0){
+
+        alert("No JSON generated.");
+
+        return;
+    }
+
+    const blob = new Blob(
+
+        [JSON.stringify(finalJSON, null, 4)],
+
+        {
+            type:"application/json"
+        }
+
+    );
+
+    const a = document.createElement("a");
+
+    a.href = URL.createObjectURL(blob);
+
+    a.download = "purchase_orders.json";
+
+    a.click();
+
+}
+
+</script>
+
+</body>
+</html>
