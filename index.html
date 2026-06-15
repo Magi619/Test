@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GTM Testing Tool</title>
+
+    <style>
+        body {
+            margin: 0;
+            padding: 40px;
+            font-family: Arial, sans-serif;
+            background: #121212;
+            color: white;
+            text-align: center;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: auto;
+            background: #1f1f1f;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 0 12px rgba(255,255,255,0.08);
+        }
+
+        h1 {
+            margin-bottom: 25px;
+        }
+
+        input {
+            width: 80%;
+            padding: 12px;
+            margin: 10px 0;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 12px 20px;
+            margin: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .run {
+            background: green;
+            color: white;
+        }
+
+        .clear {
+            background: crimson;
+            color: white;
+        }
+
+        .output {
+            margin-top: 20px;
+            background: #2d2d2d;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 50px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Frame Tool</h1>
+
+    <input type="text" id="input1" placeholder="Enter first value">
+    <br>
+
+    <input type="text" id="input2" placeholder="Enter second value">
+    <br>
+
+    <button class="run" onclick="runAction()">Run</button>
+    <button class="clear" onclick="clearAll()">Clear</button>
+
+    <div class="output" id="outputBox">
+        Output will appear here...
+    </div>
+</div>
+
+<script>
+function runAction() {
+    let value1 = document.getElementById("input1").value;
+    let value2 = document.getElementById("input2").value;
+
+    document.getElementById("outputBox").innerHTML =
+        "Value 1: " + value1 + "<br>Value 2: " + value2;
+}
+
+function clearAll() {
+    document.getElementById("input1").value = "";
+    document.getElementById("input2").value = "";
+    document.getElementById("outputBox").innerHTML = "Cleared!";
+}
+</script>
+
+</body>
+</html>
