@@ -2,642 +2,246 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Enterprise PDF Purchase Order Extractor</title>
+<title>PDF Line-by-Line JSON Extractor</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 
 <style>
+*{
+    box-sizing:border-box;
+}
 
 body{
-    font-family:Arial;
-    background:#111;
+    margin:0;
+    font-family:Segoe UI,Arial,sans-serif;
+    background:linear-gradient(135deg,#0f172a,#111827);
     color:white;
-    padding:20px;
+    min-height:100vh;
 }
 
-h1{
-    margin-bottom:20px;
+.container{
+    max-width:1200px;
+    margin:auto;
+    padding:30px;
 }
 
-input, button{
-    padding:10px 15px;
-    margin:5px;
+.card{
+    background:#1e293b;
+    border:1px solid #334155;
+    border-radius:16px;
+    padding:25px;
+    box-shadow:0 0 25px rgba(0,0,0,0.35);
+}
+
+h2{
+    margin-top:0;
+    color:#38bdf8;
+}
+
+input[type=file]{
+    width:100%;
+    padding:12px;
+    border-radius:10px;
+    border:1px solid #475569;
+    background:#0f172a;
+    color:white;
+}
+
+.buttons{
+    display:flex;
+    gap:12px;
+    margin:15px 0;
+    flex-wrap:wrap;
+}
+
+button{
+    padding:12px 20px;
+    border:none;
+    border-radius:10px;
     cursor:pointer;
+    font-weight:bold;
+    transition:0.2s;
+}
+
+.extractBtn{
+    background:#0ea5e9;
+    color:white;
+}
+
+.extractBtn:hover{
+    background:#0284c7;
+}
+
+.downloadBtn{
+    background:#22c55e;
+    color:white;
+}
+
+.downloadBtn:hover{
+    background:#16a34a;
+}
+
+button:disabled{
+    opacity:0.5;
+    cursor:not-allowed;
+}
+
+.status{
+    margin:10px 0;
+    padding:10px;
+    border-radius:8px;
+    background:#0f172a;
+    border:1px solid #334155;
+    color:#94a3b8;
 }
 
 textarea{
     width:100%;
-    height:700px;
-    background:#1e1e1e;
-    color:#00ff99;
-    border:1px solid #444;
+    height:600px;
+    background:#020617;
+    color:#00ff88;
+    border:1px solid #334155;
+    border-radius:12px;
     padding:15px;
-    font-family:Consolas;
-    font-size:13px;
+    font-family:Consolas,monospace;
+    resize:vertical;
 }
-
 </style>
 </head>
 <body>
 
-<h1>Enterprise PDF Purchase Order Extractor</h1>
+<div class="container">
+    <div class="card">
+        <h2>PDF → JSON (Line By Line)</h2>
 
-<input type="file" id="pdfFile" accept=".pdf">
+        <input type="file" id="pdfFile" accept=".pdf">
 
-<button onclick="downloadJSON()">
-Download JSON
-</button>
+        <div class="buttons">
+            <button class="extractBtn" onclick="extractPDF()">Extract</button>
+            <button class="downloadBtn" id="downloadBtn" onclick="downloadJSON()" disabled>
+                Download JSON
+            </button>
+        </div>
 
-<textarea id="output"></textarea>
+        <div class="status" id="status">Waiting for PDF...</div>
+
+        <textarea id="output"></textarea>
+    </div>
+</div>
 
 <script>
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
-let finalJSON = [];
+let extractedData = [];
+let currentPdfName = "pdf_lines";
 
-document.getElementById('pdfFile')
-.addEventListener('change', async function(e){
+function setStatus(msg){
+    document.getElementById("status").innerText = msg;
+}
 
-    const file = e.target.files[0];
+async function extractPDF(){
 
-    if(!file) return;
+    const file = document.getElementById("pdfFile").files[0];
 
-    const arrayBuffer = await file.arrayBuffer();
+    if(!file){
+        alert("Please select a PDF.");
+        return;
+    }
+
+    currentPdfName = file.name.replace(/\.pdf$/i, "");
+    extractedData = [];
+    document.getElementById("downloadBtn").disabled = true;
+
+    setStatus("Extracting PDF... Please wait");
+
+    const buffer = await file.arrayBuffer();
 
     const pdf = await pdfjsLib.getDocument({
-        data: arrayBuffer
+        data: buffer
     }).promise;
-
-    let purchaseOrders = {};
-
-    let currentPO = "";
-
-    //========================================
-    // PROCESS ALL PAGES
-    //========================================
 
     for(let pageNum = 1; pageNum <= pdf.numPages; pageNum++){
 
+        setStatus(`Processing page ${pageNum} of ${pdf.numPages}`);
+
         const page = await pdf.getPage(pageNum);
-
         const textContent = await page.getTextContent();
+        const rows = {};
 
-        let rawItems = [];
+        textContent.items.forEach(item => {
 
-        //====================================
-        // RAW ITEMS
-        //====================================
-
-        textContent.items.forEach(item=>{
-
-            let txt = item.str
-                .replace(/\s+/g," ")
-                .trim();
-
-            if(txt !== ""){
-
-                rawItems.push({
-
-                    text: txt,
-
-                    x: Number(item.transform[4].toFixed(2)),
-
-                    y: Number(item.transform[5].toFixed(2)),
-
-                    height: Number(item.height.toFixed(2))
-
-                });
-
-            }
-
-        });
-
-        //====================================
-        // FULL PAGE TEXT
-        //====================================
-
-        let pageText = rawItems
-            .map(x=>x.text)
-            .join(" ");
-
-        //====================================
-        // FIND PURCHASE ORDER NUMBER
-        //====================================
-
-        let poMatch =
-            pageText.match(/\b\d{10}\b/);
-
-        if(poMatch){
-
-            currentPO = poMatch[0];
-
-            if(!purchaseOrders[currentPO]){
-
-                purchaseOrders[currentPO] = {
-
-                    PurchaseOrderNumber: currentPO,
-
-                    Phone: "",
-
-                    Email: "",
-
-                    DeliveryAddress: [],
-
-                    Items: []
-
-                };
-
-            }
-
-        }
-
-        //====================================
-        // GROUP ROWS BY Y
-        //====================================
-
-        let rows = {};
-
-        rawItems.forEach(item=>{
-
-            const y = Math.round(item.y);
+            const x = item.transform[4];
+            const y = Math.round(item.transform[5]);
 
             if(!rows[y]){
                 rows[y] = [];
             }
 
-            rows[y].push(item);
-
-        });
-
-        // SORT LEFT → RIGHT
-
-        Object.keys(rows).forEach(y=>{
-
-            rows[y].sort((a,b)=> a.x - b.x);
-
-        });
-
-        //====================================
-        // SORT Y TOP → BOTTOM
-        //====================================
-
-        let sortedY =
-            Object.keys(rows)
-                .map(Number)
-                .sort((a,b)=> b - a);
-
-        //====================================
-        // DELIVERY ADDRESS EXTRACTION
-        //====================================
-
-        let addressLines = [];
-
-        let insideAddress = false;
-
-        sortedY.forEach(y=>{
-
-            let row = rows[y];
-
-            let rowText = row
-                .map(x=>x.text)
-                .join(" ")
-                .replace(/\s+/g," ")
-                .trim();
-
-            // START ADDRESS
-
-            if(
-                rowText.includes("Supplier Delivery Address")
-            ){
-                insideAddress = true;
-                return;
-            }
-
-            // STOP ADDRESS
-
-            if(
-                insideAddress &&
-                (
-                    rowText.includes("Supplier Code") ||
-                    rowText.includes("Line Description")
-                )
-            ){
-                insideAddress = false;
-            }
-
-            // COLLECT ADDRESS
-
-            if(insideAddress){
-
-                if(rowText !== ""){
-
-                    addressLines.push({
-
-                        text: rowText,
-
-                        fontHeight: row[0].height || 0
-
-                    });
-
-                }
-
-                // EMAIL
-
-                let emailMatch =
-                    rowText.match(
-                        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
-                    );
-
-                if(emailMatch){
-
-                    purchaseOrders[currentPO]
-                        .Email =
-                            emailMatch[0];
-
-                }
-
-                // PHONE
-
-                let phoneMatch =
-                    rowText.match(/\b\d{10,}\b/);
-
-                if(phoneMatch){
-
-                    purchaseOrders[currentPO]
-                        .Phone =
-                            phoneMatch[0];
-
-                }
-
-            }
-
-        });
-
-        //====================================
-        // CLEAN ADDRESS LINES
-        //====================================
-
-        addressLines = addressLines
-
-            .map(x=>({
-
-                text:
-                    x.text
-					.replace(/^LAITHWAITES WINES\s+/,"")
-                        .replace(/\b(\w+)\s+\1\b/g, "$1")
-                        .replace(/\s+/g," ")
-                        .trim(),
-
-                fontHeight: x.fontHeight
-
-            }))
-
-            .filter(x=>
-
-                x.text !== "" &&
-
-                // REMOVE SUPPLIER ADDRESS
-
-                
-                !x.text.includes("New Aquitaine House") &&
-                !x.text.includes("Exeter Way") &&
-                !x.text.includes("Theale") &&
-                !x.text.includes("Berkshire") &&
-                !x.text.includes("RG7 4PL") &&
-
-                // REMOVE EXTRA
-
-                !x.text.includes("Supplier") &&
-                !x.text.includes("TerryberryReward") &&
-                !x.text.includes("Line Description") &&
-                !x.text.includes("Quantity") &&
-                !x.text.includes("Unit Price") &&
-                !x.text.includes("Net") &&
-                !x.text.includes("Contact Tel") &&
-                !x.text.includes("Email:")
-
-            );
-
-        // REMOVE DUPLICATES
-
-        let seen = new Set();
-
-        addressLines = addressLines.filter(x=>{
-
-            if(seen.has(x.text)){
-                return false;
-            }
-
-            seen.add(x.text);
-
-            return true;
-
-        });
-
-        //====================================
-        // FIND CUSTOMER NAME
-        //====================================
-
-        let customerName = "";
-
-        let sortedByFont =
-            [...addressLines]
-                .sort((a,b)=>
-
-                    b.fontHeight - a.fontHeight
-
-                );
-
-        for(let line of sortedByFont){
-
-            let txt = line.text.trim();
-
-            if(
-
-                /^[A-Z][a-z]+\s[A-Z][a-z]+/.test(txt) &&
-
-                !/\d/.test(txt) &&
-
-                !txt.includes("Great Britain") &&
-
-                !txt.includes("Lincolnshire") &&
-
-                !txt.includes("CLEETHORPES")
-
-            ){
-
-                customerName = txt;
-
-                break;
-
-            }
-
-        }
-
-        //====================================
-        // MOVE NAME TO TOP OF ADDRESS
-        //====================================
-
-        if(customerName){
-
-            addressLines =
-                addressLines.filter(x=>
-
-                    x.text !== customerName
-
-                );
-
-            addressLines.unshift({
-
-                text: customerName,
-
-                fontHeight: 999
-
+            rows[y].push({
+                x: x,
+                text: item.str
             });
 
-        }
+        });
 
-        //====================================
-        // REMOVE PHONE FROM ADDRESS
-        //====================================
+        const sortedRows = Object.keys(rows)
+            .map(Number)
+            .sort((a,b)=>b-a);
 
-        addressLines = addressLines.filter(x=>
+        let lineNumber = 1;
 
-            !/^\d{10,}$/.test(x.text)
+        sortedRows.forEach(y => {
 
-        );
-
-        //====================================
-        // SAVE FINAL ADDRESS
-        //====================================
-
-        purchaseOrders[currentPO]
-            .DeliveryAddress =
-                addressLines.map(x=>x.text);
-
-        //====================================
-        // PROCESS ROWS
-        //====================================
-
-        sortedY.forEach(y=>{
-
-            let row = rows[y];
-
-            let fullRow = row
-                .map(x=>x.text)
+            const lineText = rows[y]
+                .sort((a,b)=>a.x-b.x)
+                .map(obj=>obj.text)
                 .join(" ")
-				
                 .replace(/\s+/g," ")
-				
                 .trim();
-				
-                
 
-
-
-            //================================
-            // SKIP JUNK
-            //================================
-
-            if(
-                fullRow.includes("TOTAL") ||
-                fullRow.includes("VAT") ||
-                fullRow.includes("@") ||
-                fullRow.includes("Delivery by") ||
-                fullRow.includes("Purchase Order") ||
-                fullRow.includes("Supplier Code") ||
-                fullRow.includes("Description") ||
-                fullRow.includes("Quantity") ||
-                fullRow.includes("Unit Price") ||
-                fullRow.includes("Net") ||
-                fullRow.includes("CHARGES") ||
-                fullRow.includes("404") ||
-                fullRow.includes("##")
-            ){
-                return;
-            }
-
-            //================================
-            // LAST ITEM
-            //================================
-
-            let lastItem =
-                purchaseOrders[currentPO]
-                    .Items[
-                        purchaseOrders[currentPO]
-                            .Items.length - 1
-                    ];
-
-            //================================
-            // MULTI-LINE DESCRIPTION
-            //================================
-
-            if(
-
-                !fullRow.match(/^\d+\s+[A-Z]\d{5}/) &&
-
-                lastItem &&
-
-                fullRow.length > 0 &&
-
-                !fullRow.includes("£")
-
-            ){
-
-                lastItem.Description +=
-                    " " + fullRow.trim();
-
-                return;
-
-            }
-
-            //================================
-            // VALID ITEM ROW
-            //================================
-
-            if(
-                fullRow.match(/^\d+\s+[A-Z]\d{5}/)
-            ){
-
-                // LINE
-
-                let lineMatch =
-                    fullRow.match(/^(\d+)/);
-
-                let line =
-                    lineMatch ? lineMatch[1] : "";
-
-                // SUPPLIER CODE
-
-                let supplierMatch =
-                    fullRow.match(/\b([A-Z]\d{5})\b/);
-
-                let supplierCode =
-                    supplierMatch ? supplierMatch[1] : "";
-
-                // REWARD CODE
-
-                let rewardMatch =
-                    fullRow.match(/\b(DIR\d+)\b/);
-
-                let rewardCode =
-                    rewardMatch ? rewardMatch[1] : "";
-
-                // QUANTITY + PRICES
-
-                let endMatch =
-                    fullRow.match(
-                        /(\d+)\s+£([\d\.]+)\s+£([\d\.]+)$/
-                    );
-
-                let quantity = "";
-                let unitPrice = "";
-                let net = "";
-
-                if(endMatch){
-
-                    quantity = endMatch[1];
-
-                    unitPrice = endMatch[2];
-
-                    net = endMatch[3];
-
-                }
-
-                // DESCRIPTION
-
-                let description = fullRow;
-
-                description =
-                    description.replace(
-                        /^\d+\s+[A-Z]\d{5}\s+DIR\d+\s*/,
-                        ""
-                    );
-
-                description =
-                    description.replace(
-                        /\s+\d+\s+£[\d\.]+\s+£[\d\.]+$/,
-                        ""
-                    );
-
-                description =
-                    description
-                        .replace(/\s+/g," ")
-                        .trim();
-
-                // PUSH ITEM
-
-                purchaseOrders[currentPO]
-                    .Items.push({
-
-                        "Line": line,
-
-                        "SupplierCode": supplierCode,
-
-                        "TerryberryRewardCode": rewardCode,
-
-                        "Description": description,
-
-                        "Quantity": quantity,
-
-                        "UnitPrice": unitPrice,
-
-                        "Net": net
-
-                    });
-
+            if(lineText){
+                extractedData.push({
+                    page: pageNum,
+                    line: lineNumber++,
+                    text: lineText
+                });
             }
 
         });
 
     }
 
-    //========================================
-    // FINAL JSON
-    //========================================
+    document.getElementById("output").value =
+        JSON.stringify(extractedData,null,2);
 
-    finalJSON =
-        Object.values(purchaseOrders);
-
-    document.getElementById("output")
-        .value =
-        JSON.stringify(finalJSON, null, 4);
-
-});
-
-//========================================
-// DOWNLOAD JSON
-//========================================
+    document.getElementById("downloadBtn").disabled = false;
+    setStatus(`Done! Extracted ${extractedData.length} lines`);
+}
 
 function downloadJSON(){
 
-    if(finalJSON.length === 0){
-
-        alert("No JSON generated.");
-
+    if(extractedData.length === 0){
+        alert("No data extracted.");
         return;
     }
 
     const blob = new Blob(
-
-        [JSON.stringify(finalJSON, null, 4)],
-
-        {
-            type:"application/json"
-        }
-
+        [JSON.stringify(extractedData,null,2)],
+        {type:"application/json"}
     );
 
+    const url = URL.createObjectURL(blob);
+
     const a = document.createElement("a");
+    a.href = url;
 
-    a.href = URL.createObjectURL(blob);
-
-    a.download = "purchase_orders.json";
+    // Use PDF filename
+    a.download = currentPdfName + ".json";
 
     a.click();
-
+    URL.revokeObjectURL(url);
 }
 
 </script>
